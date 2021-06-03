@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"time"
 )
 
 type Server struct {
@@ -41,37 +42,48 @@ func (s *Server) ListenMessage() {
 
 }
 func (s *Server) Broadcast(user *User, msg string) {
-	message := "[" + user.Addr +  "]:" +user.Name + msg
+	message := "[" + user.Addr + "]" + user.Name + ":" + msg
 	s.Message <- message
 }
 func (s *Server) Handler(conn net.Conn) {
 	fmt.Println(" create connect success")
-	user := NewUser(conn)
+	user := NewUser(conn, s)
 	//用户上线
-	s.MapLock.Lock()
-	s.OnlineMap[user.Name] = user
-	s.MapLock.Unlock()
-	//广播消息
-	s.Broadcast(user, "已上线")
-
+	user.Online()
+	//检测是否活跃的 channel
+	isActive := make(chan bool)
 	go func() {
-		buf:=make([]byte,4096)
-		for{
-			n,err:=conn.Read(buf)
+		buf := make([]byte, 4096)
+		for {
+			n, err := conn.Read(buf)
 			//约定读到0就下线
-			if n==0{
-				s.Broadcast(user,"下线")
+			if n == 0 {
+				user.Offline()
 				return
 			}
-			if err!=nil && err!=io.EOF{
-				fmt.Println("conn read err:",err)
+			if err != nil && err != io.EOF {
+				fmt.Println("conn read err:", err)
 				return
 			}
-			msg:=string(buf[:n-1])
-			s.Broadcast(user,msg)
+			msg := string(buf[:n-1])
+			user.SendMessage(msg)
+			isActive <- true
 		}
 	}()
-	select {
+	for {
+		select {
+		case <-isActive:
+
+		case <-time.After(100 * time.Second):
+			//发送消息
+			user.EchoMessage("你长时间未活动，已被强制下线")
+			//销毁资源
+			time.Sleep(time.Second)
+			close(user.Ch)
+			err := conn.Close()
+			fmt.Println(err)
+			return
+		}
 	}
 
 }
